@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-**podcast-coord** is a podcast coordination project. This repository is in its early stages of development.
+**podcast-coord** is a podcast AI co-host tool that transforms written content into engaging dialogue podcasts. Users provide source material, configure two hosts (the human author and an AI co-host), and the system generates a conversational script with text-to-speech and recording capabilities.
 
 - **License**: MIT
 - **Author**: Zikai Alex Wen
@@ -11,52 +11,95 @@
 
 ```
 podcast-coord/
-├── README.md          # Project description and documentation
-├── LICENSE            # MIT License
-└── CLAUDE.md          # This file - AI assistant guidelines
+├── src/
+│   ├── App.jsx              # Main React application with 3-tab workflow
+│   ├── main.jsx             # React entry point
+│   ├── index.css            # Tailwind CSS styles
+│   └── components/
+│       ├── AudioControls.jsx # TTS and recording controls (TTSButton, RecordButton, AudioStatusBadge)
+│       ├── Button.jsx        # Reusable button component with variants
+│       ├── Card.jsx          # Card container component
+│       └── HostConfig.jsx    # Host configuration form
+├── server.js                 # Express backend with API endpoints
+├── audio/                    # Server-side audio storage (gitignored)
+├── vite.config.js            # Vite config with API proxy
+├── tailwind.config.js        # Tailwind configuration
+├── package.json              # Dependencies and scripts
+└── .env                      # API keys (gitignored)
 ```
 
-> **Note**: This project is newly initialized. The structure will expand as development progresses.
+## Technology Stack
 
-## Development Guidelines
+- **Frontend**: React 18 + Vite + Tailwind CSS
+- **Backend**: Express.js (Node.js)
+- **AI**: Claude API (Anthropic) for script generation and metadata
+- **TTS**: ElevenLabs API for AI co-host voice synthesis
+- **Audio**: Web Audio API for recording, playback, and export
 
-### Getting Started
+## Commands Reference
 
-Since this is a new project, when adding features:
+```bash
+# Install dependencies
+npm install
 
-1. Discuss the technology stack and architecture before implementation
-2. Create appropriate configuration files (package.json, requirements.txt, etc.) based on chosen stack
-3. Set up linting and formatting tools early
-4. Add a `.gitignore` appropriate for the chosen technology
+# Start both frontend and backend (recommended)
+npm run dev:all
 
-### Code Style Conventions
+# Or run separately:
+npm run dev      # Start Vite dev server (port 5173)
+npm run server   # Start Express server (port 3001)
 
-When code is added to this project, follow these principles:
-
-- Write clear, self-documenting code
-- Keep functions focused and single-purpose
-- Add comments only where logic isn't self-evident
-- Use meaningful variable and function names
-
-### Commit Message Format
-
-Use clear, descriptive commit messages:
-- Start with a verb in imperative mood (Add, Fix, Update, Remove, Refactor)
-- Keep the first line under 72 characters
-- Reference issues when applicable
-
-Examples:
-```
-Add podcast episode scheduling feature
-Fix audio file upload validation
-Update README with setup instructions
+# Build for production
+npm run build
 ```
 
-### Branch Naming
+## Environment Variables
 
-- Feature branches: `feature/<description>`
-- Bug fixes: `fix/<description>`
-- Claude branches: `claude/<description>-<session-id>`
+Create a `.env` file (see `.env.example`):
+```
+ANTHROPIC_API_KEY=your_anthropic_key
+ELEVENLABS_API_KEY=your_elevenlabs_key
+```
+
+## Architecture Notes
+
+### Application Flow
+
+1. **Setup Tab**: User pastes source content and configures two hosts (Author + AI Co-Host)
+2. **Prompt Tab**: System generates a script prompt, user can edit before generation
+3. **Script Tab**: Displays generated dialogue, allows editing, TTS generation, recording, and export
+
+### Key API Endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/generate-script` | POST | Generate podcast script using Claude |
+| `/api/text-to-speech` | POST | Generate TTS audio via ElevenLabs |
+| `/api/generate-meta` | POST | Generate episode summary + chapter markers |
+| `/api/tts/:lineIndex` | GET/POST/DELETE | Manage TTS audio files |
+| `/api/recordings/:lineIndex` | GET/POST/DELETE | Manage user recordings |
+| `/api/audio-status` | GET | Get audio status for all lines |
+
+### Data Persistence
+
+- **LocalStorage**: Script, host config, blog text, session ID
+- **Server**: Audio files stored in `audio/` directory with session-based naming
+- **Session ID**: Generated per script to isolate audio files
+
+### Audio Processing
+
+- TTS audio: MP3 format from ElevenLabs
+- Recordings: WebM format from browser MediaRecorder
+- Export: WAV format, concatenates all audio in order
+- Meta-info: Calculates real timestamps from audio durations
+
+## Code Style Conventions
+
+- React functional components with hooks
+- Tailwind CSS for styling (dark theme)
+- ES modules throughout
+- Async/await for API calls
+- lucide-react for icons
 
 ## AI Assistant Instructions
 
@@ -64,79 +107,23 @@ Update README with setup instructions
 
 1. **Read before editing**: Always read files before modifying them
 2. **Understand context**: Review related files to understand the broader codebase
-3. **Check for tests**: If tests exist, understand what they cover before making changes
+3. **Check API contracts**: Ensure frontend/backend changes stay in sync
 
-### When Implementing Features
+### Key Files to Understand
 
-1. Keep changes minimal and focused
-2. Don't over-engineer - implement only what's requested
-3. Avoid adding unnecessary abstractions
-4. Test your changes when a test framework is available
+- `src/App.jsx`: Main application state and workflow logic
+- `src/components/AudioControls.jsx`: Complex audio state management
+- `server.js`: All API endpoints and Claude/ElevenLabs integrations
 
 ### What to Avoid
 
 - Don't add features beyond what was requested
 - Don't refactor unrelated code while fixing bugs
-- Don't add comments to code you didn't change
-- Don't create documentation files unless explicitly asked
-- Don't guess at project requirements - ask for clarification
+- Don't commit `.env` or `audio/` directory
+- Don't change the 3-tab workflow structure without explicit request
 
 ### Security Considerations
 
-- Never commit secrets, API keys, or credentials
-- Validate user input at system boundaries
-- Be cautious with file system operations
-- Follow OWASP security guidelines
-
-## Commands Reference
-
-> This section will be populated as the project develops with build, test, and run commands.
-
-### Placeholder Commands
-
-```bash
-# Install dependencies (update once stack is chosen)
-# npm install / pip install -r requirements.txt / etc.
-
-# Run tests (update once testing framework is set up)
-# npm test / pytest / etc.
-
-# Start development server (update once implemented)
-# npm run dev / python main.py / etc.
-```
-
-## Architecture Notes
-
-> This section will be expanded as architectural decisions are made.
-
-### Planned Features
-
-Based on the project name "podcast-coord", potential features may include:
-- Podcast episode scheduling
-- Guest coordination
-- Recording session management
-- Content planning and organization
-
-### Technology Decisions
-
-Technology stack to be determined. Update this section when decisions are made:
-- **Backend**: TBD
-- **Frontend**: TBD (if applicable)
-- **Database**: TBD
-- **Hosting**: TBD
-
-## Contributing
-
-1. Create a feature branch from the main branch
-2. Make your changes with clear commit messages
-3. Ensure all tests pass (when available)
-4. Create a pull request with a clear description
-
-## Updating This File
-
-As the project evolves, update this CLAUDE.md file to reflect:
-- New directory structure and key files
-- Added build/test/run commands
-- Architectural decisions and patterns
-- Project-specific conventions
-- Known issues or gotchas
+- API keys stored in `.env` (never commit)
+- Audio files stored server-side with session isolation
+- No user authentication (local tool only)
