@@ -19,63 +19,33 @@ export function AudioStatusBadge({ hasAudio, isAuthor }) {
   );
 }
 
-// Text-to-Speech button for AI Co-Host lines with server persistence
-export function TTSButton({ text, lineIndex, sessionId, onStatusChange }) {
-  const [isLoading, setIsLoading] = useState(true);
+// Text-to-Speech button for AI Co-Host lines (audio stored in browser memory)
+export function TTSButton({ text, lineIndex, audioBlob, onAudioChange }) {
   const [isGenerating, setIsGenerating] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
   const [audioUrl, setAudioUrl] = useState(null);
   const audioRef = useRef(null);
 
-  // Notify parent of status changes
+  // Create object URL when audioBlob changes
   useEffect(() => {
-    onStatusChange?.(!!audioUrl);
-  }, [audioUrl, onStatusChange]);
+    if (audioBlob) {
+      const url = URL.createObjectURL(audioBlob);
+      setAudioUrl(url);
 
-  // Load existing TTS on mount
-  useEffect(() => {
-    if (!sessionId) {
-      setIsLoading(false);
-      return;
+      const audio = new Audio(url);
+      audioRef.current = audio;
+      audio.onended = () => setIsPlaying(false);
+      audio.onpause = () => setIsPlaying(false);
+      audio.onplay = () => setIsPlaying(true);
+
+      return () => {
+        URL.revokeObjectURL(url);
+      };
+    } else {
+      setAudioUrl(null);
+      audioRef.current = null;
     }
-
-    const loadTTS = async () => {
-      try {
-        const response = await fetch(`/api/tts/${lineIndex}?sessionId=${sessionId}`);
-        if (response.ok) {
-          const blob = await response.blob();
-          const url = URL.createObjectURL(blob);
-          setAudioUrl(url);
-
-          const audio = new Audio(url);
-          audioRef.current = audio;
-          audio.onended = () => setIsPlaying(false);
-          audio.onpause = () => setIsPlaying(false);
-          audio.onplay = () => setIsPlaying(true);
-        }
-      } catch (error) {
-        // No TTS exists, that's fine
-      } finally {
-        setIsLoading(false);
-      }
-    };
-
-    loadTTS();
-  }, [lineIndex, sessionId]);
-
-  const saveTTS = async (audioBlob) => {
-    if (!sessionId) return;
-
-    try {
-      await fetch(`/api/tts/${lineIndex}?sessionId=${sessionId}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'audio/mpeg' },
-        body: audioBlob,
-      });
-    } catch (error) {
-      console.error('Error saving TTS:', error);
-    }
-  };
+  }, [audioBlob]);
 
   const handlePlay = () => {
     if (isPlaying && audioRef.current) {
@@ -84,8 +54,8 @@ export function TTSButton({ text, lineIndex, sessionId, onStatusChange }) {
       return;
     }
 
-    if (audioUrl) {
-      audioRef.current?.play();
+    if (audioRef.current) {
+      audioRef.current.play();
       setIsPlaying(true);
     }
   };
@@ -104,26 +74,9 @@ export function TTSButton({ text, lineIndex, sessionId, onStatusChange }) {
       }
 
       const blob = await response.blob();
-      const url = URL.createObjectURL(blob);
 
-      // Clean up old URL if exists
-      if (audioUrl) {
-        URL.revokeObjectURL(audioUrl);
-      }
-
-      setAudioUrl(url);
-
-      // Save to server for persistence
-      await saveTTS(blob);
-
-      const audio = new Audio(url);
-      audioRef.current = audio;
-
-      audio.onended = () => setIsPlaying(false);
-      audio.onpause = () => setIsPlaying(false);
-      audio.onplay = () => setIsPlaying(true);
-
-      audio.play();
+      // Store in parent component's state (browser memory)
+      onAudioChange(lineIndex, blob);
     } catch (error) {
       console.error('TTS error:', error);
     } finally {
@@ -131,16 +84,8 @@ export function TTSButton({ text, lineIndex, sessionId, onStatusChange }) {
     }
   };
 
-  if (isLoading) {
-    return (
-      <div className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs text-slate-500">
-        <Loader2 size={14} className="animate-spin" />
-      </div>
-    );
-  }
-
   // If audio exists, show play button with regenerate option
-  if (audioUrl) {
+  if (audioBlob) {
     return (
       <div className="flex items-center gap-1">
         <button
@@ -186,81 +131,28 @@ export function TTSButton({ text, lineIndex, sessionId, onStatusChange }) {
   );
 }
 
-// Recording button for Author lines with server persistence
-export function RecordButton({ lineIndex, sessionId, onStatusChange }) {
+// Recording button for Author lines (audio stored in browser memory)
+export function RecordButton({ lineIndex, audioBlob, onAudioChange }) {
   const [isRecording, setIsRecording] = useState(false);
-  const [hasRecording, setHasRecording] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
-  const [isSaving, setIsSaving] = useState(false);
-  const [isLoading, setIsLoading] = useState(true);
   const [audioUrl, setAudioUrl] = useState(null);
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
   const audioRef = useRef(null);
 
-  // Notify parent of status changes
+  // Create object URL when audioBlob changes
   useEffect(() => {
-    onStatusChange?.(hasRecording);
-  }, [hasRecording, onStatusChange]);
+    if (audioBlob) {
+      const url = URL.createObjectURL(audioBlob);
+      setAudioUrl(url);
 
-  // Load existing recording on mount
-  useEffect(() => {
-    if (!sessionId) {
-      setIsLoading(false);
-      return;
+      return () => {
+        URL.revokeObjectURL(url);
+      };
+    } else {
+      setAudioUrl(null);
     }
-
-    const loadRecording = async () => {
-      try {
-        const response = await fetch(`/api/recordings/${lineIndex}?sessionId=${sessionId}`);
-        if (response.ok) {
-          const blob = await response.blob();
-          const url = URL.createObjectURL(blob);
-          setAudioUrl(url);
-          setHasRecording(true);
-        }
-      } catch (error) {
-        // No recording exists, that's fine
-      } finally {
-        setIsLoading(false);
-      }
-    };
-
-    loadRecording();
-  }, [lineIndex, sessionId]);
-
-  const saveRecording = async (audioBlob) => {
-    if (!sessionId) return;
-
-    setIsSaving(true);
-    try {
-      const response = await fetch(`/api/recordings/${lineIndex}?sessionId=${sessionId}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'audio/webm' },
-        body: audioBlob,
-      });
-
-      if (!response.ok) {
-        throw new Error('Failed to save recording');
-      }
-    } catch (error) {
-      console.error('Error saving recording:', error);
-    } finally {
-      setIsSaving(false);
-    }
-  };
-
-  const deleteRecording = async () => {
-    if (!sessionId) return;
-
-    try {
-      await fetch(`/api/recordings/${lineIndex}?sessionId=${sessionId}`, {
-        method: 'DELETE',
-      });
-    } catch (error) {
-      console.error('Error deleting recording:', error);
-    }
-  };
+  }, [audioBlob]);
 
   const startRecording = async () => {
     try {
@@ -275,15 +167,12 @@ export function RecordButton({ lineIndex, sessionId, onStatusChange }) {
         }
       };
 
-      mediaRecorder.onstop = async () => {
-        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
-        const url = URL.createObjectURL(audioBlob);
-        setAudioUrl(url);
-        setHasRecording(true);
+      mediaRecorder.onstop = () => {
+        const blob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
         stream.getTracks().forEach(track => track.stop());
 
-        // Save to server
-        await saveRecording(audioBlob);
+        // Store in parent component's state (browser memory)
+        onAudioChange(lineIndex, blob);
       };
 
       mediaRecorder.start();
@@ -316,25 +205,11 @@ export function RecordButton({ lineIndex, sessionId, onStatusChange }) {
     setIsPlaying(true);
   };
 
-  const resetRecording = async () => {
-    if (audioUrl) {
-      URL.revokeObjectURL(audioUrl);
-    }
-    setAudioUrl(null);
-    setHasRecording(false);
+  const resetRecording = () => {
+    // Clear from parent component's state
+    onAudioChange(lineIndex, null);
     setIsPlaying(false);
-
-    // Delete from server
-    await deleteRecording();
   };
-
-  if (isLoading) {
-    return (
-      <div className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs text-slate-500">
-        <Loader2 size={14} className="animate-spin" />
-      </div>
-    );
-  }
 
   if (isRecording) {
     return (
@@ -349,7 +224,7 @@ export function RecordButton({ lineIndex, sessionId, onStatusChange }) {
     );
   }
 
-  if (hasRecording) {
+  if (audioBlob) {
     return (
       <div className="flex items-center gap-1">
         <button
@@ -360,19 +235,13 @@ export function RecordButton({ lineIndex, sessionId, onStatusChange }) {
           {isPlaying ? <Pause size={14} /> : <Play size={14} />}
           {isPlaying ? 'Pause' : 'Play'}
         </button>
-        {isSaving ? (
-          <div className="p-1.5 text-slate-400">
-            <Loader2 size={14} className="animate-spin" />
-          </div>
-        ) : (
-          <button
-            onClick={resetRecording}
-            className="p-1.5 rounded-lg bg-slate-700/50 text-slate-400 hover:bg-slate-700 hover:text-slate-300 transition-all"
-            title="Re-record"
-          >
-            <RotateCcw size={14} />
-          </button>
-        )}
+        <button
+          onClick={resetRecording}
+          className="p-1.5 rounded-lg bg-slate-700/50 text-slate-400 hover:bg-slate-700 hover:text-slate-300 transition-all"
+          title="Re-record"
+        >
+          <RotateCcw size={14} />
+        </button>
       </div>
     );
   }

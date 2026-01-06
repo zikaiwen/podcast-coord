@@ -29,13 +29,7 @@ const STORAGE_KEYS = {
   hostA: 'podcast-coord-hostA',
   hostB: 'podcast-coord-hostB',
   script: 'podcast-coord-script',
-  sessionId: 'podcast-coord-sessionId',
 };
-
-// Generate a unique session ID
-function generateSessionId() {
-  return `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-}
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('setup'); // setup, generate, script
@@ -51,11 +45,8 @@ export default function App() {
   const [script, setScript] = useState([]);
   const [isSimulating, setIsSimulating] = useState(false);
 
-  // Session ID for recordings
-  const [sessionId, setSessionId] = useState('');
-
-  // Audio status tracking for each line (index -> hasAudio)
-  const [audioStatus, setAudioStatus] = useState({});
+  // Audio blobs stored in browser memory (index -> Blob)
+  const [audioBlobs, setAudioBlobs] = useState({});
 
   // Export state
   const [isExporting, setIsExporting] = useState(false);
@@ -70,43 +61,39 @@ export default function App() {
   const [showMetaInfo, setShowMetaInfo] = useState(false);
   const [metaCopied, setMetaCopied] = useState(false);
 
-  // Update audio status for a specific line
-  const updateAudioStatus = (idx, hasAudio) => {
-    setAudioStatus(prev => ({ ...prev, [idx]: hasAudio }));
+  // Update audio blob for a specific line (stored in browser memory)
+  const handleAudioChange = (idx, blob) => {
+    setAudioBlobs(prev => {
+      const updated = { ...prev };
+      if (blob) {
+        updated[idx] = blob;
+      } else {
+        delete updated[idx];
+      }
+      return updated;
+    });
   };
 
-  // Export audio - stitch all available audio files
+  // Export audio - stitch all available audio blobs from browser memory
   const exportAudio = async () => {
-    if (!sessionId || script.length === 0) return;
+    if (script.length === 0) return;
 
     setIsExporting(true);
     try {
-      // Get audio status from server
-      const statusRes = await fetch(`/api/audio-status?sessionId=${sessionId}&lineCount=${script.length}`);
-      if (!statusRes.ok) throw new Error('Failed to get audio status');
-      const { status } = await statusRes.json();
-
-      // Collect audio buffers for lines that have audio
       const audioContext = new AudioContext();
       const audioBuffers = [];
 
-      for (const item of status) {
-        if (!item.hasAudio) continue;
-
-        const endpoint = item.type === 'tts'
-          ? `/api/tts/${item.lineIndex}?sessionId=${sessionId}`
-          : `/api/recordings/${item.lineIndex}?sessionId=${sessionId}`;
+      // Decode each blob in order
+      for (let i = 0; i < script.length; i++) {
+        const blob = audioBlobs[i];
+        if (!blob) continue;
 
         try {
-          const res = await fetch(endpoint);
-          if (!res.ok) continue;
-
-          const blob = await res.blob();
           const arrayBuffer = await blob.arrayBuffer();
           const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
           audioBuffers.push(audioBuffer);
         } catch (err) {
-          console.warn(`Skipping line ${item.lineIndex}:`, err);
+          console.warn(`Skipping line ${i}:`, err);
         }
       }
 
@@ -142,7 +129,7 @@ export default function App() {
       const url = URL.createObjectURL(wavBlob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `podcast-${sessionId}.wav`;
+      a.download = `podcast-${Date.now()}.wav`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -210,7 +197,6 @@ export default function App() {
     const savedHostA = localStorage.getItem(STORAGE_KEYS.hostA);
     const savedHostB = localStorage.getItem(STORAGE_KEYS.hostB);
     const savedScript = localStorage.getItem(STORAGE_KEYS.script);
-    let savedSessionId = localStorage.getItem(STORAGE_KEYS.sessionId);
 
     if (savedBlogText) setBlogText(savedBlogText);
     if (savedHostA) setHostA(JSON.parse(savedHostA));
@@ -224,13 +210,6 @@ export default function App() {
         setActiveTab('script');
       }
     }
-
-    // Create new session ID if none exists
-    if (!savedSessionId) {
-      savedSessionId = generateSessionId();
-      localStorage.setItem(STORAGE_KEYS.sessionId, savedSessionId);
-    }
-    setSessionId(savedSessionId);
   }, []);
 
   // Persist blogText when it changes
@@ -330,11 +309,7 @@ ${blogText.substring(0, 300)}... [Truncated for preview, full text attached belo
 
       const data = await response.json();
       setScript(data.script);
-      setAudioStatus({}); // Reset audio status for new script
-      // Generate new session ID so audio components won't load old audio
-      const newSessionId = generateSessionId();
-      setSessionId(newSessionId);
-      localStorage.setItem(STORAGE_KEYS.sessionId, newSessionId);
+      setAudioBlobs({}); // Clear audio blobs for new script
       setActiveTab('script');
     } catch (error) {
       console.error('Error generating script:', error);
@@ -372,8 +347,8 @@ ${blogText.substring(0, 300)}... [Truncated for preview, full text attached belo
     setScript(prev => prev.map((line, i) =>
       i === idx ? { ...line, text: editingText } : line
     ));
-    // Clear audio status since text changed
-    setAudioStatus(prev => ({ ...prev, [idx]: false }));
+    // Clear audio blob since text changed
+    handleAudioChange(idx, null);
     setEditingIdx(-1);
     setEditingText('');
   };
@@ -384,48 +359,31 @@ ${blogText.substring(0, 300)}... [Truncated for preview, full text attached belo
     setEditingText('');
   };
 
-  // Generate meta-info/chapter markers based on actual audio
+  // Generate meta-info/chapter markers based on actual audio in browser memory
   const generateMetaInfo = async () => {
-    if (script.length === 0 || !sessionId) return;
+    if (script.length === 0) return;
+
+    // Check if any audio exists
+    const hasAnyAudio = Object.keys(audioBlobs).length > 0;
+    if (!hasAnyAudio) {
+      alert('No audio available. Please generate TTS or record your lines first.');
+      return;
+    }
 
     setIsGeneratingMeta(true);
     try {
-      // First, get audio status from server
-      const statusRes = await fetch(`/api/audio-status?sessionId=${sessionId}&lineCount=${script.length}`);
-      if (!statusRes.ok) throw new Error('Failed to get audio status');
-      const { status } = await statusRes.json();
-
-      // Check if any audio exists
-      const hasAnyAudio = status.some(s => s.hasAudio);
-      if (!hasAnyAudio) {
-        alert('No audio available. Please generate TTS or record your lines first.');
-        setIsGeneratingMeta(false);
-        return;
-      }
-
-      // Fetch each audio file and get its duration
       const audioContext = new AudioContext();
       const audioDurations = [];
 
+      // Get duration from each audio blob in memory
       for (let i = 0; i < script.length; i++) {
-        const item = status[i];
-        if (!item.hasAudio) {
+        const blob = audioBlobs[i];
+        if (!blob) {
           audioDurations.push(0);
           continue;
         }
 
-        const endpoint = item.type === 'tts'
-          ? `/api/tts/${i}?sessionId=${sessionId}`
-          : `/api/recordings/${i}?sessionId=${sessionId}`;
-
         try {
-          const res = await fetch(endpoint);
-          if (!res.ok) {
-            audioDurations.push(0);
-            continue;
-          }
-
-          const blob = await res.blob();
           const arrayBuffer = await blob.arrayBuffer();
           const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
           audioDurations.push(audioBuffer.duration);
@@ -778,7 +736,7 @@ ${blogText.substring(0, 300)}... [Truncated for preview, full text attached belo
                         <span className="text-xs text-slate-500 font-bold uppercase tracking-wider">
                           {line.speaker}
                         </span>
-                        <AudioStatusBadge hasAudio={audioStatus[idx]} isAuthor={isAuthorLine(line)} />
+                        <AudioStatusBadge hasAudio={!!audioBlobs[idx]} isAuthor={isAuthorLine(line)} />
                       </div>
                       <div className={`p-5 rounded-2xl text-slate-200 leading-relaxed shadow-sm group hover:ring-2 ring-indigo-500/50 transition-all relative ${
                         editingIdx === idx ? 'w-full' : ''
@@ -836,15 +794,15 @@ ${blogText.substring(0, 300)}... [Truncated for preview, full text attached belo
                         {isAuthorLine(line) ? (
                           <RecordButton
                             lineIndex={idx}
-                            sessionId={sessionId}
-                            onStatusChange={(hasAudio) => updateAudioStatus(idx, hasAudio)}
+                            audioBlob={audioBlobs[idx]}
+                            onAudioChange={handleAudioChange}
                           />
                         ) : (
                           <TTSButton
                             text={line.text}
                             lineIndex={idx}
-                            sessionId={sessionId}
-                            onStatusChange={(hasAudio) => updateAudioStatus(idx, hasAudio)}
+                            audioBlob={audioBlobs[idx]}
+                            onAudioChange={handleAudioChange}
                           />
                         )}
                       </div>

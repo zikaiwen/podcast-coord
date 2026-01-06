@@ -20,8 +20,7 @@ podcast-coord/
 │       ├── Button.jsx        # Reusable button component with variants
 │       ├── Card.jsx          # Card container component
 │       └── HostConfig.jsx    # Host configuration form
-├── server.js                 # Express backend with API endpoints
-├── audio/                    # Server-side audio storage (gitignored)
+├── server.js                 # Express backend with API endpoints (stateless)
 ├── vite.config.js            # Vite config with API proxy
 ├── tailwind.config.js        # Tailwind configuration
 ├── package.json              # Dependencies and scripts
@@ -31,10 +30,10 @@ podcast-coord/
 ## Technology Stack
 
 - **Frontend**: React 18 + Vite + Tailwind CSS
-- **Backend**: Express.js (Node.js)
+- **Backend**: Express.js (Node.js) - stateless API proxy
 - **AI**: Claude API (Anthropic) for script generation and metadata
 - **TTS**: ElevenLabs API for AI co-host voice synthesis
-- **Audio**: Web Audio API for recording, playback, and export
+- **Audio**: Web Audio API for recording, playback, and export (all client-side)
 
 ## Commands Reference
 
@@ -74,24 +73,42 @@ ELEVENLABS_API_KEY=your_elevenlabs_key
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/api/generate-script` | POST | Generate podcast script using Claude |
-| `/api/text-to-speech` | POST | Generate TTS audio via ElevenLabs |
+| `/api/text-to-speech` | POST | Generate TTS audio via ElevenLabs (streams to client) |
 | `/api/generate-meta` | POST | Generate episode summary + chapter markers |
-| `/api/tts/:lineIndex` | GET/POST/DELETE | Manage TTS audio files |
-| `/api/recordings/:lineIndex` | GET/POST/DELETE | Manage user recordings |
-| `/api/audio-status` | GET | Get audio status for all lines |
 
 ### Data Persistence
 
-- **LocalStorage**: Script, host config, blog text, session ID
-- **Server**: Audio files stored in `audio/` directory with session-based naming
-- **Session ID**: Generated per script to isolate audio files
+- **LocalStorage**: Script, host config, blog text
+- **Browser Memory**: Audio blobs stored in React state (not persisted)
 
-### Audio Processing
+### Audio Processing (Client-Side)
 
-- TTS audio: MP3 format from ElevenLabs
-- Recordings: WebM format from browser MediaRecorder
-- Export: WAV format, concatenates all audio in order
-- Meta-info: Calculates real timestamps from audio durations
+All audio processing happens in the browser:
+
+- **TTS audio**: MP3 from ElevenLabs API, stored as Blob in React state
+- **Recordings**: WebM from browser MediaRecorder, stored as Blob in React state
+- **Export**: Web Audio API decodes all blobs, concatenates, encodes to WAV for download
+- **Meta-info**: Calculates real timestamps from audio blob durations
+
+```
+┌─────────────────────────────────────────────────────────┐
+│  Browser                                                │
+│                                                         │
+│  ┌─────────────────────────────────────────────────┐   │
+│  │ Audio Storage (React state: audioBlobs)         │   │
+│  │                                                  │   │
+│  │  Line 0: [Blob]  ← TTS or recording             │   │
+│  │  Line 1: [Blob]  ← TTS or recording             │   │
+│  │  Line 2: [Blob]  ← TTS or recording             │   │
+│  │  ...                                             │   │
+│  └─────────────────────────────────────────────────┘   │
+│                         │                               │
+│                         ▼                               │
+│  ┌─────────────────────────────────────────────────┐   │
+│  │ Export: Stitch all → WAV → Download             │   │
+│  └─────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────┘
+```
 
 ## Code Style Conventions
 
@@ -111,19 +128,20 @@ ELEVENLABS_API_KEY=your_elevenlabs_key
 
 ### Key Files to Understand
 
-- `src/App.jsx`: Main application state and workflow logic
-- `src/components/AudioControls.jsx`: Complex audio state management
-- `server.js`: All API endpoints and Claude/ElevenLabs integrations
+- `src/App.jsx`: Main application state, audio blob management, and workflow logic
+- `src/components/AudioControls.jsx`: TTS/recording components with blob-based audio
+- `server.js`: Stateless API endpoints for Claude/ElevenLabs integrations
 
 ### What to Avoid
 
 - Don't add features beyond what was requested
 - Don't refactor unrelated code while fixing bugs
-- Don't commit `.env` or `audio/` directory
+- Don't commit `.env`
 - Don't change the 3-tab workflow structure without explicit request
 
 ### Security Considerations
 
 - API keys stored in `.env` (never commit)
-- Audio files stored server-side with session isolation
-- No user authentication (local tool only)
+- Server is stateless - no disk writes, no file storage
+- Audio stays in browser memory only
+- No user authentication (designed for single-user or hosted deployment)
