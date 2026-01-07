@@ -10,6 +10,18 @@ Transform your written content into engaging dialogue podcasts with an AI co-hos
 - **Audio Export**: Export the complete podcast as a WAV file
 - **Meta Info**: Generate episode summaries and chapter markers with accurate timestamps
 
+## Screenshots
+
+### Setup Tab
+![Setup Tab](screenshots/setup.png)
+
+Configure your content and cast - paste your source material and set up both hosts with their roles and tones.
+
+### Script Tab
+![Script Tab](screenshots/script.png)
+
+Edit and generate audio line by line - use TTS for AI co-host lines and record your own voice for author lines.
+
 ## Quick Start
 
 ### Prerequisites
