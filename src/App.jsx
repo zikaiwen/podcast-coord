@@ -29,6 +29,7 @@ const STORAGE_KEYS = {
   hostA: 'podcast-coord-hostA',
   hostB: 'podcast-coord-hostB',
   script: 'podcast-coord-script',
+  startingSpeaker: 'podcast-coord-startingSpeaker',
 };
 
 export default function App() {
@@ -37,9 +38,12 @@ export default function App() {
   const [generatedPrompt, setGeneratedPrompt] = useState('');
   const [copied, setCopied] = useState(false);
 
-  // Host State - Host A is Author, Host B is AI
-  const [hostA, setHostA] = useState({ name: 'Me (Author)', role: 'author', tone: 'Passionate and informative' });
+  // Host State - Host A is You, Host B is AI
+  const [hostA, setHostA] = useState({ name: 'Your Name', role: 'expert', tone: 'Passionate and informative' });
   const [hostB, setHostB] = useState({ name: 'AI Co-Pilot', role: 'interviewer', tone: 'Curious and supportive' });
+
+  // Starting speaker preference: 'ai' or 'author'
+  const [startingSpeaker, setStartingSpeaker] = useState('ai');
 
   // Demo Script State
   const [script, setScript] = useState([]);
@@ -202,6 +206,9 @@ export default function App() {
     if (savedHostA) setHostA(JSON.parse(savedHostA));
     if (savedHostB) setHostB(JSON.parse(savedHostB));
 
+    const savedStartingSpeaker = localStorage.getItem(STORAGE_KEYS.startingSpeaker);
+    if (savedStartingSpeaker) setStartingSpeaker(savedStartingSpeaker);
+
     // If we have a saved script, load it and go directly to script view
     if (savedScript) {
       const parsedScript = JSON.parse(savedScript);
@@ -228,6 +235,11 @@ export default function App() {
     localStorage.setItem(STORAGE_KEYS.hostB, JSON.stringify(hostB));
   }, [hostB]);
 
+  // Persist starting speaker preference
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEYS.startingSpeaker, startingSpeaker);
+  }, [startingSpeaker]);
+
   // Persist script when it changes
   useEffect(() => {
     if (script.length > 0) {
@@ -246,27 +258,28 @@ export default function App() {
 
   // Generate the "System Prompt" based on config
   const generateSystemPrompt = () => {
+    const startingInstruction = startingSpeaker === 'ai'
+      ? `- Start with ${hostB.name} introducing ${hostA.name} and the topic.`
+      : `- Start with ${hostA.name} introducing themselves and the topic, with ${hostB.name} responding.`;
+
     const prompt = `
-TASK: Create a dialogue podcast script featuring a conversation between a Host and an AI Co-Host.
+TASK: Create a dialogue podcast script featuring a conversation between two hosts.
 
 ROLES:
-- HOST: ${hostA.name}. Tone: ${hostA.tone}.
-  * The human host and expert. Their lines should be based on the source content, rephrased as natural spoken dialogue.
+- HOST A: ${hostA.name}. Role: ${hostA.role}. Tone: ${hostA.tone}.
 
-- AI CO-HOST: ${hostB.name}. Role: ${hostB.role}. Tone: ${hostB.tone}.
-  * The AI partner in the conversation. They ask thoughtful questions, offer reactions, and help guide the discussion to make the Host shine.
+- HOST B: ${hostB.name}. Role: ${hostB.role}. Tone: ${hostB.tone}.
 
 GUIDELINES:
-- Start with the AI Co-Host introducing the Host and the topic.
+${startingInstruction}
 - Create a natural back-and-forth dialogue between the two hosts.
 - Break the source content into conversational segments.
-- The AI Co-Host should interview and engage, not lecture.
-- Ensure the Host sounds confident and approachable.
+- Each host should embody their role and tone.
 - Create 6-10 dialogue exchanges.
 
 SOURCE MATERIAL:
 """
-${blogText.substring(0, 300)}... [Truncated for preview, full text attached below]
+${blogText}
 """
     `.trim();
     setGeneratedPrompt(prompt);
@@ -285,19 +298,13 @@ ${blogText.substring(0, 300)}... [Truncated for preview, full text attached belo
     setApiError(null);
 
     try {
-      // Build full prompt by replacing truncated preview with actual content
-      const fullPrompt = generatedPrompt.replace(
-        /"""[\s\S]*?\[Truncated for preview, full text attached below\][\s\S]*?"""/,
-        `"""\n${blogText}\n"""`
-      );
-
       const response = await fetch('/api/generate-script', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          systemPrompt: fullPrompt,
+          systemPrompt: generatedPrompt,
           blogText,
         }),
       });
@@ -320,19 +327,17 @@ ${blogText.substring(0, 300)}... [Truncated for preview, full text attached belo
   };
 
   const copyToClipboard = () => {
-    const fullPrompt = generatedPrompt.replace('[Truncated for preview, full text attached below]', blogText);
-    navigator.clipboard.writeText(fullPrompt);
+    navigator.clipboard.writeText(generatedPrompt);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
 
   // Helper to determine if a line is from the author (Host A)
-  // Uses the first line to identify the AI host, since AI always introduces first
+  // Compares speaker name to hostA.name to identify author lines
   const isAuthorLine = (line) => {
     if (script.length === 0) return false;
-    // The first speaker is always the AI Co-Host (intro)
-    const aiHostName = script[0]?.speaker;
-    return line.speaker !== aiHostName;
+    // Match speaker name to hostA (the author)
+    return line.speaker === hostA.name;
   };
 
   // Start editing a line
@@ -502,7 +507,7 @@ ${blogText.substring(0, 300)}... [Truncated for preview, full text attached belo
                 <Card title="Cast Configuration" icon={User}>
                   <div className="grid gap-8">
                     <HostConfig
-                      label="Host A: YOU (The Author)"
+                      label="Host A: You"
                       host={hostA}
                       onChange={setHostA}
                       isAi={false}
@@ -514,6 +519,34 @@ ${blogText.substring(0, 300)}... [Truncated for preview, full text attached belo
                       onChange={setHostB}
                       isAi={true}
                     />
+                    <div className="h-px bg-slate-700/50" />
+                    <div className="space-y-2">
+                      <label className="block text-sm text-slate-400">Who starts the conversation?</label>
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => setStartingSpeaker('ai')}
+                          className={`flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg border transition-all ${
+                            startingSpeaker === 'ai'
+                              ? 'bg-emerald-600/20 border-emerald-500 text-emerald-400'
+                              : 'bg-slate-900 border-slate-700 text-slate-400 hover:border-slate-600'
+                          }`}
+                        >
+                          <Bot size={16} />
+                          AI Co-Host
+                        </button>
+                        <button
+                          onClick={() => setStartingSpeaker('author')}
+                          className={`flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg border transition-all ${
+                            startingSpeaker === 'author'
+                              ? 'bg-indigo-600/20 border-indigo-500 text-indigo-400'
+                              : 'bg-slate-900 border-slate-700 text-slate-400 hover:border-slate-600'
+                          }`}
+                        >
+                          <UserCircle size={16} />
+                          You
+                        </button>
+                      </div>
+                    </div>
                   </div>
                 </Card>
 
@@ -599,7 +632,6 @@ ${blogText.substring(0, 300)}... [Truncated for preview, full text attached belo
               ) : (
                 <pre className="whitespace-pre-wrap text-slate-300 font-mono text-sm leading-relaxed overflow-x-auto max-h-[500px] overflow-y-auto pr-4 custom-scrollbar">
                   {generatedPrompt}
-                  {'\n\n[...Full content will be appended here...]'}
                 </pre>
               )}
             </div>

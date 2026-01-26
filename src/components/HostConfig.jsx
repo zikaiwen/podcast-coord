@@ -24,22 +24,17 @@ const HostConfig = ({ host, onChange, label, isAi }) => {
 
         <div>
           <label className="block text-sm text-slate-400 mb-1.5">Role / Archetype</label>
-          {isAi ? (
-             <select
-              value={host.role}
-              onChange={(e) => onChange({...host, role: e.target.value})}
-              className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white outline-none"
-            >
-              <option value="interviewer">The Interviewer (Asks guiding questions)</option>
-              <option value="hype">The Hype Person (Excited & Agreeable)</option>
-              <option value="student">The Student (Needs explanation)</option>
-              <option value="skeptic">The Friendly Skeptic (Plays devil's advocate)</option>
-            </select>
-          ) : (
-             <div className="w-full bg-slate-800/50 border border-slate-700 rounded-lg px-3 py-2 text-slate-400 italic cursor-not-allowed">
-                The Author (Source of Knowledge)
-             </div>
-          )}
+          <select
+            value={host.role}
+            onChange={(e) => onChange({...host, role: e.target.value})}
+            className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white outline-none"
+          >
+            <option value="expert">The Expert (Source of knowledge)</option>
+            <option value="interviewer">The Interviewer (Asks guiding questions)</option>
+            <option value="hype">The Hype Person (Excited & Agreeable)</option>
+            <option value="student">The Student (Needs explanation)</option>
+            <option value="skeptic">The Friendly Skeptic (Plays devil's advocate)</option>
+          </select>
         </div>
 
         <div>
