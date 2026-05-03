@@ -51,6 +51,10 @@ export default function App() {
 
   // Audio blobs stored in browser memory (index -> Blob)
   const [audioBlobs, setAudioBlobs] = useState({});
+  const [recordingTranscripts, setRecordingTranscripts] = useState({});
+  const [rewritingLineIdx, setRewritingLineIdx] = useState(-1);
+  const [rewriteError, setRewriteError] = useState(null);
+  const lastRewriteRef = useRef('');
 
   // Export state
   const [isExporting, setIsExporting] = useState(false);
@@ -76,6 +80,14 @@ export default function App() {
       }
       return updated;
     });
+
+    if (!blob) {
+      setRecordingTranscripts(prev => {
+        const updated = { ...prev };
+        delete updated[idx];
+        return updated;
+      });
+    }
   };
 
   // Export audio - stitch all available audio blobs from browser memory
@@ -317,6 +329,9 @@ ${blogText}
       const data = await response.json();
       setScript(data.script);
       setAudioBlobs({}); // Clear audio blobs for new script
+      setRecordingTranscripts({});
+      setRewriteError(null);
+      setRewritingLineIdx(-1);
       setActiveTab('script');
     } catch (error) {
       console.error('Error generating script:', error);
@@ -338,6 +353,85 @@ ${blogText}
     if (script.length === 0) return false;
     // Match speaker name to hostA (the author)
     return line.speaker === hostA.name;
+  };
+
+  const getNextAiLineIndex = (fromIdx, scriptToSearch = script) => {
+    for (let i = fromIdx + 1; i < scriptToSearch.length; i++) {
+      if (scriptToSearch[i].speaker !== hostA.name) {
+        return i;
+      }
+    }
+    return -1;
+  };
+
+  const handleAuthorTranscriptChange = async (lineIndex, transcript) => {
+    const cleanTranscript = transcript.trim();
+
+    if (cleanTranscript) {
+      setRecordingTranscripts(prev => ({
+        ...prev,
+        [lineIndex]: cleanTranscript,
+      }));
+    }
+
+    const scriptSnapshot = script;
+    const nextAiLineIndex = getNextAiLineIndex(lineIndex, scriptSnapshot);
+
+    if (!cleanTranscript) {
+      setRewriteError('Could not transcribe that recording. Edit your line manually or try recording again.');
+      return;
+    }
+
+    if (nextAiLineIndex === -1) {
+      return;
+    }
+
+    const rewriteKey = `${lineIndex}:${nextAiLineIndex}:${cleanTranscript}`;
+    if (lastRewriteRef.current === rewriteKey) {
+      return;
+    }
+    lastRewriteRef.current = rewriteKey;
+
+    setRewriteError(null);
+    setRewritingLineIdx(nextAiLineIndex);
+
+    try {
+      const response = await fetch('/api/rewrite-next-line', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          script: scriptSnapshot,
+          lineIndex,
+          nextLineIndex: nextAiLineIndex,
+          transcript: cleanTranscript,
+          hostA,
+          hostB,
+          blogText,
+        }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.details || errorData.error || 'Failed to rewrite next AI line');
+      }
+
+      const data = await response.json();
+      if (!data.text) {
+        throw new Error('Rewrite response did not include text');
+      }
+
+      setScript(prev => prev.map((line, idx) =>
+        idx === nextAiLineIndex
+          ? { ...line, text: data.text, type: data.type || line.type }
+          : line
+      ));
+      handleAudioChange(nextAiLineIndex, null);
+    } catch (error) {
+      console.error('Error rewriting AI co-host line:', error);
+      setRewriteError(error.message);
+    } finally {
+      setRewritingLineIdx(prev => (prev === nextAiLineIndex ? -1 : prev));
+    }
   };
 
   // Start editing a line
@@ -748,6 +842,11 @@ ${blogText}
               </div>
             ) : (
               <div className="space-y-6 pb-20">
+                {rewriteError && (
+                  <div className="bg-amber-500/10 border border-amber-500/30 rounded-xl p-4 text-amber-300 text-sm">
+                    {rewriteError}
+                  </div>
+                )}
                 {script.map((line, idx) => (
                   <div
                     key={idx}
@@ -769,6 +868,12 @@ ${blogText}
                           {line.speaker}
                         </span>
                         <AudioStatusBadge hasAudio={!!audioBlobs[idx]} isAuthor={isAuthorLine(line)} />
+                        {rewritingLineIdx === idx && (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 text-xs font-medium">
+                            <Loader2 size={10} className="animate-spin" />
+                            Adapting
+                          </span>
+                        )}
                       </div>
                       <div className={`p-5 rounded-2xl text-slate-200 leading-relaxed shadow-sm group hover:ring-2 ring-indigo-500/50 transition-all relative ${
                         editingIdx === idx ? 'w-full' : ''
@@ -822,12 +927,18 @@ ${blogText}
                           </>
                         )}
                       </div>
+                      {isAuthorLine(line) && recordingTranscripts[idx] && (
+                        <p className="mt-2 ml-1 mr-1 text-xs text-slate-500 max-w-full">
+                          Transcript used for AI response: {recordingTranscripts[idx]}
+                        </p>
+                      )}
                       <div className="mt-2 ml-1 mr-1">
                         {isAuthorLine(line) ? (
                           <RecordButton
                             lineIndex={idx}
                             audioBlob={audioBlobs[idx]}
                             onAudioChange={handleAudioChange}
+                            onTranscriptChange={handleAuthorTranscriptChange}
                           />
                         ) : (
                           <TTSButton

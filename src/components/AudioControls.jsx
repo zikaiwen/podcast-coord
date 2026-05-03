@@ -132,13 +132,18 @@ export function TTSButton({ text, lineIndex, audioBlob, onAudioChange }) {
 }
 
 // Recording button for Author lines (audio stored in browser memory)
-export function RecordButton({ lineIndex, audioBlob, onAudioChange }) {
+export function RecordButton({ lineIndex, audioBlob, onAudioChange, onTranscriptChange }) {
   const [isRecording, setIsRecording] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
   const [audioUrl, setAudioUrl] = useState(null);
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
   const audioRef = useRef(null);
+  const recognitionRef = useRef(null);
+  const transcriptRef = useRef('');
+  const finalTranscriptRef = useRef('');
+  const manualRecordingRef = useRef(false);
+  const flushedTranscriptRef = useRef(false);
 
   // Create object URL when audioBlob changes
   useEffect(() => {
@@ -154,12 +159,65 @@ export function RecordButton({ lineIndex, audioBlob, onAudioChange }) {
     }
   }, [audioBlob]);
 
+  const flushTranscript = () => {
+    if (!onTranscriptChange || flushedTranscriptRef.current) return;
+    flushedTranscriptRef.current = true;
+    onTranscriptChange(lineIndex, transcriptRef.current.trim());
+  };
+
   const startRecording = async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const mediaRecorder = new MediaRecorder(stream);
       mediaRecorderRef.current = mediaRecorder;
       audioChunksRef.current = [];
+      transcriptRef.current = '';
+      finalTranscriptRef.current = '';
+      manualRecordingRef.current = true;
+      flushedTranscriptRef.current = false;
+
+      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+      if (SpeechRecognition && onTranscriptChange) {
+        const recognition = new SpeechRecognition();
+        recognition.continuous = true;
+        recognition.interimResults = true;
+        recognition.lang = navigator.language || 'en-US';
+
+        recognition.onresult = (event) => {
+          let interimTranscript = '';
+
+          for (let i = event.resultIndex; i < event.results.length; i++) {
+            const transcript = event.results[i][0].transcript;
+            if (event.results[i].isFinal) {
+              finalTranscriptRef.current = `${finalTranscriptRef.current} ${transcript}`.trim();
+            } else {
+              interimTranscript += transcript;
+            }
+          }
+
+          transcriptRef.current = `${finalTranscriptRef.current} ${interimTranscript}`.trim();
+        };
+
+        recognition.onerror = (event) => {
+          console.warn('Speech recognition error:', event.error);
+        };
+
+        recognition.onend = () => {
+          if (!manualRecordingRef.current) {
+            flushTranscript();
+          }
+        };
+
+        recognitionRef.current = recognition;
+        try {
+          recognition.start();
+        } catch (error) {
+          console.warn('Speech recognition could not start:', error);
+          recognitionRef.current = null;
+        }
+      } else {
+        recognitionRef.current = null;
+      }
 
       mediaRecorder.ondataavailable = (event) => {
         if (event.data.size > 0) {
@@ -170,9 +228,26 @@ export function RecordButton({ lineIndex, audioBlob, onAudioChange }) {
       mediaRecorder.onstop = () => {
         const blob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
         stream.getTracks().forEach(track => track.stop());
+        manualRecordingRef.current = false;
+
+        if (recognitionRef.current) {
+          try {
+            recognitionRef.current.stop();
+          } catch (error) {
+            console.warn('Speech recognition could not stop:', error);
+          }
+        }
 
         // Store in parent component's state (browser memory)
         onAudioChange(lineIndex, blob);
+
+        if (onTranscriptChange) {
+          if (recognitionRef.current) {
+            window.setTimeout(flushTranscript, 250);
+          } else {
+            flushTranscript();
+          }
+        }
       };
 
       mediaRecorder.start();

@@ -75,6 +75,133 @@ Return ONLY the JSON array, no markdown or explanation.`;
   }
 });
 
+app.post('/api/rewrite-next-line', async (req, res) => {
+  const {
+    script,
+    lineIndex,
+    nextLineIndex,
+    transcript,
+    hostA,
+    hostB,
+    blogText,
+  } = req.body;
+
+  if (!script || !Array.isArray(script) || script.length === 0) {
+    return res.status(400).json({ error: 'Script is required' });
+  }
+
+  if (typeof lineIndex !== 'number' || typeof nextLineIndex !== 'number') {
+    return res.status(400).json({ error: 'Line indexes are required' });
+  }
+
+  if (!transcript) {
+    return res.status(400).json({ error: 'Transcript is required' });
+  }
+
+  const authorLine = script[lineIndex];
+  const aiLine = script[nextLineIndex];
+
+  if (!authorLine || !aiLine) {
+    return res.status(400).json({ error: 'Line indexes are out of range' });
+  }
+
+  const formatLine = (line, index) => `${index}. ${line.speaker}: ${line.text}`;
+  const priorContext = script
+    .slice(Math.max(0, lineIndex - 4), lineIndex)
+    .map(formatLine)
+    .join('\n');
+  const followingContext = script
+    .slice(nextLineIndex + 1, Math.min(script.length, nextLineIndex + 4))
+    .map(formatLine)
+    .join('\n');
+
+  const systemPrompt = `You rewrite one AI co-host line in a podcast script after the human author records a real take.
+
+GOAL:
+Make the AI co-host's next line respond naturally to what the author actually said in the recording transcript, while preserving the episode flow.
+
+HOSTS:
+- Author: ${hostA?.name || authorLine.speaker}. Role: ${hostA?.role || 'host'}. Tone: ${hostA?.tone || 'natural'}.
+- AI Co-host: ${hostB?.name || aiLine.speaker}. Role: ${hostB?.role || 'co-host'}. Tone: ${hostB?.tone || 'curious and supportive'}.
+
+RULES:
+- Rewrite ONLY the AI co-host line.
+- Keep the same speaker.
+- Stay grounded in the source material and surrounding script.
+- Acknowledge or build on the recorded transcript directly.
+- Keep it concise enough for spoken podcast dialogue.
+- Do not mention transcription, recording, or that the line was rewritten.
+
+OUTPUT FORMAT:
+Return ONLY a JSON object with this exact structure:
+{ "text": "Rewritten AI co-host line", "type": "question|reaction|content|intro" }`;
+
+  const userPrompt = `SOURCE MATERIAL:
+"""
+${blogText || ''}
+"""
+
+PRIOR SCRIPT CONTEXT:
+${priorContext || '(No prior context)'}
+
+AUTHOR SCRIPTED LINE:
+${formatLine(authorLine, lineIndex)}
+
+AUTHOR ACTUAL RECORDING TRANSCRIPT:
+"""
+${transcript}
+"""
+
+CURRENT AI CO-HOST LINE TO REWRITE:
+${formatLine(aiLine, nextLineIndex)}
+
+FOLLOWING SCRIPT CONTEXT:
+${followingContext || '(No following context)'}`;
+
+  try {
+    const message = await anthropic.messages.create({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 512,
+      messages: [
+        {
+          role: 'user',
+          content: userPrompt,
+        },
+      ],
+      system: systemPrompt,
+    });
+
+    const responseText = message.content[0].text;
+
+    let rewrite;
+    try {
+      rewrite = JSON.parse(responseText);
+    } catch {
+      const jsonMatch = responseText.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        rewrite = JSON.parse(jsonMatch[0]);
+      } else {
+        throw new Error('Failed to parse rewrite from response');
+      }
+    }
+
+    if (!rewrite.text) {
+      throw new Error('Rewrite response did not include text');
+    }
+
+    res.json({
+      text: rewrite.text,
+      type: rewrite.type || aiLine.type || 'reaction',
+    });
+  } catch (error) {
+    console.error('Error rewriting next AI line:', error);
+    res.status(500).json({
+      error: 'Failed to rewrite next AI line',
+      details: error.message,
+    });
+  }
+});
+
 // ElevenLabs Text-to-Speech endpoint
 app.post('/api/text-to-speech', async (req, res) => {
   const { text, voiceId } = req.body;
