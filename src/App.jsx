@@ -15,7 +15,8 @@ import {
   Bot,
   Loader2,
   X,
-  ListOrdered
+  ListOrdered,
+  Plus
 } from 'lucide-react';
 
 import Button from './components/Button';
@@ -48,6 +49,7 @@ export default function App() {
   // Demo Script State
   const [script, setScript] = useState([]);
   const [isSimulating, setIsSimulating] = useState(false);
+  const [isAddingRound, setIsAddingRound] = useState(false);
 
   // Audio blobs stored in browser memory (index -> Blob)
   const [audioBlobs, setAudioBlobs] = useState({});
@@ -431,6 +433,43 @@ ${blogText}
       setRewriteError(error.message);
     } finally {
       setRewritingLineIdx(prev => (prev === nextAiLineIndex ? -1 : prev));
+    }
+  };
+
+  const addConversationRound = async () => {
+    if (script.length === 0) return;
+
+    setIsAddingRound(true);
+    setRewriteError(null);
+
+    try {
+      const response = await fetch('/api/generate-extra-round', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          script,
+          hostA,
+          hostB,
+          blogText,
+        }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.details || errorData.error || 'Failed to add conversation round');
+      }
+
+      const data = await response.json();
+      if (!Array.isArray(data.round) || data.round.length === 0) {
+        throw new Error('Extra round response did not include dialogue lines');
+      }
+
+      setScript(prev => [...prev, ...data.round]);
+    } catch (error) {
+      console.error('Error adding conversation round:', error);
+      setRewriteError(error.message);
+    } finally {
+      setIsAddingRound(false);
     }
   };
 
@@ -953,8 +992,16 @@ ${blogText}
                   </div>
                 ))}
 
-                <div className="flex justify-center pt-8 opacity-50">
-                  <span className="text-sm text-slate-500 italic">End of Preview</span>
+                <div className="flex flex-col items-center gap-3 pt-8">
+                  <button
+                    onClick={addConversationRound}
+                    disabled={isAddingRound || script.length === 0}
+                    className="flex items-center gap-2 px-4 py-2 rounded-lg bg-slate-700 hover:bg-slate-600 text-white font-medium transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {isAddingRound ? <Loader2 size={18} className="animate-spin" /> : <Plus size={18} />}
+                    {isAddingRound ? 'Adding...' : 'Add Round'}
+                  </button>
+                  <span className="text-sm text-slate-500 italic opacity-50">End of Preview</span>
                 </div>
               </div>
             )}

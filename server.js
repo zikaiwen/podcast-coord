@@ -202,6 +202,104 @@ ${followingContext || '(No following context)'}`;
   }
 });
 
+app.post('/api/generate-extra-round', async (req, res) => {
+  const { script, hostA, hostB, blogText } = req.body;
+
+  if (!script || !Array.isArray(script) || script.length === 0) {
+    return res.status(400).json({ error: 'Script is required' });
+  }
+
+  const hostAName = hostA?.name || 'Host A';
+  const hostBName = hostB?.name || 'Host B';
+  const lastSpeaker = script[script.length - 1]?.speaker;
+  const firstSpeaker = lastSpeaker === hostAName ? hostBName : hostAName;
+  const secondSpeaker = firstSpeaker === hostAName ? hostBName : hostAName;
+  const recentContext = script
+    .slice(Math.max(0, script.length - 8))
+    .map((line, index) => `${script.length - Math.min(script.length, 8) + index}. ${line.speaker}: ${line.text}`)
+    .join('\n');
+
+  const systemPrompt = `You extend a two-host podcast script by exactly one conversational round.
+
+HOSTS:
+- ${hostAName}: Role: ${hostA?.role || 'expert'}. Tone: ${hostA?.tone || 'natural and informative'}.
+- ${hostBName}: Role: ${hostB?.role || 'interviewer'}. Tone: ${hostB?.tone || 'curious and supportive'}.
+
+RULES:
+- Add exactly 2 dialogue lines.
+- The first added line MUST be spoken by ${firstSpeaker}.
+- The second added line MUST be spoken by ${secondSpeaker}.
+- Continue naturally from the current ending.
+- Stay grounded in the source material and avoid repeating earlier lines.
+- Keep each line concise enough for spoken podcast dialogue.
+- Preserve each host's role and tone.
+
+OUTPUT FORMAT:
+Return ONLY a JSON array with this exact structure:
+[
+  { "speaker": "${firstSpeaker}", "text": "What they say", "type": "question|reaction|content|intro" },
+  { "speaker": "${secondSpeaker}", "text": "What they say", "type": "question|reaction|content|intro" }
+]`;
+
+  const userPrompt = `SOURCE MATERIAL:
+"""
+${blogText || ''}
+"""
+
+RECENT SCRIPT CONTEXT:
+${recentContext}`;
+
+  try {
+    const message = await anthropic.messages.create({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 768,
+      messages: [
+        {
+          role: 'user',
+          content: userPrompt,
+        },
+      ],
+      system: systemPrompt,
+    });
+
+    const responseText = message.content[0].text;
+
+    let round;
+    try {
+      round = JSON.parse(responseText);
+    } catch {
+      const jsonMatch = responseText.match(/\[[\s\S]*\]/);
+      if (jsonMatch) {
+        round = JSON.parse(jsonMatch[0]);
+      } else {
+        throw new Error('Failed to parse extra round from response');
+      }
+    }
+
+    if (!Array.isArray(round) || round.length === 0) {
+      throw new Error('Extra round response did not include dialogue lines');
+    }
+
+    const normalizedRound = round.slice(0, 2).map((line, index) => ({
+      speaker: index === 0 ? firstSpeaker : secondSpeaker,
+      text: line.text,
+      type: line.type || (index === 0 ? 'question' : 'reaction'),
+    }));
+
+    if (normalizedRound.some(line => !line.text)) {
+      throw new Error('Extra round response included an empty line');
+    }
+
+    res.json({ round: normalizedRound });
+  } catch (error) {
+    console.error('Error generating extra conversation round:', error);
+    res.status(500).json({
+      error: 'Failed to generate extra conversation round',
+      details: error.message,
+    });
+  }
+});
+
 // ElevenLabs Text-to-Speech endpoint
 app.post('/api/text-to-speech', async (req, res) => {
   const { text, voiceId } = req.body;
