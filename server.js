@@ -6,6 +6,7 @@ import { ElevenLabsClient } from '@elevenlabs/elevenlabs-js';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
+const ANTHROPIC_MODEL = process.env.ANTHROPIC_MODEL || 'claude-opus-4-6';
 
 app.use(cors());
 app.use(express.json());
@@ -13,6 +14,114 @@ app.use(express.json());
 const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
 });
+
+const extractBalancedJson = (text, openChar, closeChar) => {
+  const candidates = [];
+
+  for (let start = 0; start < text.length; start++) {
+    if (text[start] !== openChar) continue;
+
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+
+    for (let i = start; i < text.length; i++) {
+      const char = text[i];
+
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+
+      if (char === '\\') {
+        escaped = true;
+        continue;
+      }
+
+      if (char === '"') {
+        inString = !inString;
+        continue;
+      }
+
+      if (inString) continue;
+
+      if (char === openChar) depth++;
+      if (char === closeChar) depth--;
+
+      if (depth === 0) {
+        candidates.push(text.slice(start, i + 1));
+        break;
+      }
+    }
+  }
+
+  return candidates;
+};
+
+const parseJsonFromModel = (responseText) => {
+  const text = responseText.trim();
+  const candidates = [text];
+
+  for (const match of text.matchAll(/```(?:json)?\s*([\s\S]*?)```/gi)) {
+    candidates.push(match[1].trim());
+  }
+
+  candidates.push(...extractBalancedJson(text, '[', ']'));
+  candidates.push(...extractBalancedJson(text, '{', '}'));
+
+  for (const candidate of candidates) {
+    try {
+      return JSON.parse(candidate);
+    } catch {
+      // Try the next candidate.
+    }
+  }
+
+  throw new Error(`Failed to parse JSON from model response: ${text.slice(0, 300)}`);
+};
+
+// Pull the dialogue array out of whatever shape the model returned:
+// a bare array, or an object that nests the array under some key
+// (script, dialogue, lines, podcast, transcript, ...).
+const extractDialogueArray = (parsed) => {
+  if (Array.isArray(parsed)) return parsed;
+  if (!parsed || typeof parsed !== 'object') return null;
+
+  const preferredKeys = ['script', 'dialogue', 'lines', 'podcast', 'transcript', 'conversation'];
+  for (const key of preferredKeys) {
+    if (Array.isArray(parsed[key])) return parsed[key];
+  }
+
+  // Fall back to the first array-valued property whose items look like dialogue.
+  for (const value of Object.values(parsed)) {
+    if (Array.isArray(value) && value.some((item) => item?.speaker || item?.text)) {
+      return value;
+    }
+  }
+
+  // A single line object returned on its own.
+  if (parsed.speaker || parsed.text) return [parsed];
+
+  return null;
+};
+
+const normalizeDialogueLines = (lines, fallbackType = 'content') => {
+  if (!Array.isArray(lines) || lines.length === 0) {
+    throw new Error('Model response did not include dialogue lines');
+  }
+
+  return lines.map((line) => {
+    if (!line?.speaker || !line?.text) {
+      throw new Error('Model response included a dialogue line without speaker or text');
+    }
+
+    return {
+      speaker: String(line.speaker),
+      text: String(line.text),
+      type: line.type || fallbackType,
+    };
+  });
+};
 
 app.post('/api/generate-script', async (req, res) => {
   const { systemPrompt, blogText } = req.body;
@@ -29,45 +138,43 @@ app.post('/api/generate-script', async (req, res) => {
   const fullSystemPrompt = `${systemPrompt}
 
 OUTPUT FORMAT:
-Return a JSON array of dialogue objects with this exact structure:
+Return a valid JSON array of dialogue objects with this exact structure:
 [
   { "speaker": "Host Name", "text": "What they say", "type": "intro|content|question|reaction" }
 ]
 
-Return ONLY the JSON array, no markdown or explanation.`;
+Return ONLY the JSON array. Do not wrap it in markdown, prose, or an object.`;
 
+  let responseText;
   try {
     const message = await anthropic.messages.create({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 2048,
+      model: ANTHROPIC_MODEL,
+      max_tokens: 8192,
       messages: [
         {
           role: 'user',
-          content: 'Generate the podcast script based on the source material provided above.',
+          content: `Generate the podcast script based on this source material:\n\n${blogText}`,
         },
       ],
       system: fullSystemPrompt,
     });
 
-    const responseText = message.content[0].text;
+    const textBlock = message.content.find((block) => block.type === 'text');
+    responseText = textBlock?.text;
 
-    // Parse the JSON response
-    let script;
-    try {
-      script = JSON.parse(responseText);
-    } catch {
-      // If parsing fails, try to extract JSON from the response
-      const jsonMatch = responseText.match(/\[[\s\S]*\]/);
-      if (jsonMatch) {
-        script = JSON.parse(jsonMatch[0]);
-      } else {
-        throw new Error('Failed to parse script from response');
-      }
+    if (!responseText) {
+      throw new Error('Model response did not include any text content');
     }
+
+    const parsedResponse = parseJsonFromModel(responseText);
+    const script = normalizeDialogueLines(extractDialogueArray(parsedResponse));
 
     res.json({ script });
   } catch (error) {
     console.error('Error generating script:', error);
+    if (responseText) {
+      console.error('Raw model response was:\n', responseText);
+    }
     res.status(500).json({
       error: 'Failed to generate script',
       details: error.message
@@ -160,7 +267,7 @@ ${followingContext || '(No following context)'}`;
 
   try {
     const message = await anthropic.messages.create({
-      model: 'claude-sonnet-4-20250514',
+      model: ANTHROPIC_MODEL,
       max_tokens: 512,
       messages: [
         {
@@ -172,18 +279,7 @@ ${followingContext || '(No following context)'}`;
     });
 
     const responseText = message.content[0].text;
-
-    let rewrite;
-    try {
-      rewrite = JSON.parse(responseText);
-    } catch {
-      const jsonMatch = responseText.match(/\{[\s\S]*\}/);
-      if (jsonMatch) {
-        rewrite = JSON.parse(jsonMatch[0]);
-      } else {
-        throw new Error('Failed to parse rewrite from response');
-      }
-    }
+    const rewrite = parseJsonFromModel(responseText);
 
     if (!rewrite.text) {
       throw new Error('Rewrite response did not include text');
@@ -251,7 +347,7 @@ ${recentContext}`;
 
   try {
     const message = await anthropic.messages.create({
-      model: 'claude-sonnet-4-20250514',
+      model: ANTHROPIC_MODEL,
       max_tokens: 768,
       messages: [
         {
@@ -263,18 +359,8 @@ ${recentContext}`;
     });
 
     const responseText = message.content[0].text;
-
-    let round;
-    try {
-      round = JSON.parse(responseText);
-    } catch {
-      const jsonMatch = responseText.match(/\[[\s\S]*\]/);
-      if (jsonMatch) {
-        round = JSON.parse(jsonMatch[0]);
-      } else {
-        throw new Error('Failed to parse extra round from response');
-      }
-    }
+    const parsedResponse = parseJsonFromModel(responseText);
+    const round = Array.isArray(parsedResponse) ? parsedResponse : parsedResponse.round;
 
     if (!Array.isArray(round) || round.length === 0) {
       throw new Error('Extra round response did not include dialogue lines');
@@ -372,7 +458,7 @@ Return ONLY the summary text, no additional formatting or explanation.`;
 
   try {
     const message = await anthropic.messages.create({
-      model: 'claude-sonnet-4-20250514',
+      model: ANTHROPIC_MODEL,
       max_tokens: 256,
       messages: [
         {
@@ -469,7 +555,7 @@ Return ONLY the metadata text, no additional explanation.`;
 
   try {
     const message = await anthropic.messages.create({
-      model: 'claude-sonnet-4-20250514',
+      model: ANTHROPIC_MODEL,
       max_tokens: 1024,
       messages: [
         {

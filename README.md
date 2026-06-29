@@ -26,7 +26,7 @@ Edit and generate audio line by line - use TTS for AI co-host lines and record y
 
 ### Prerequisites
 
-- Node.js 18+ (recommend using `nvm use 24`)
+- Node.js 20.19+ (recommend using `nvm use`)
 - Anthropic API key ([get one here](https://console.anthropic.com/settings/keys))
 - ElevenLabs API key ([get one here](https://elevenlabs.io/))
 

@@ -3,10 +3,13 @@
   "version": "1.0.0",
   "description": "Blog to Podcast coordination tool",
   "type": "module",
+  "engines": {
+    "node": ">=20.19.0"
+  },
   "scripts": {
     "dev": "vite",
     "server": "node server.js",
-    "dev:all": "npm run server & npm run dev",
+    "dev:all": "bash scripts/dev-all.sh",
     "build": "vite build",
     "preview": "vite preview"
   },
