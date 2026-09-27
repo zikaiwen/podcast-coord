@@ -2,7 +2,6 @@ import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
 import Anthropic from '@anthropic-ai/sdk';
-import { ElevenLabsClient } from '@elevenlabs/elevenlabs-js';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -13,6 +12,9 @@ app.use(express.json());
 
 const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
+  defaultHeaders: process.env.ANTHROPIC_WORKSPACE_ID?.trim()
+    ? { 'anthropic-workspace-id': process.env.ANTHROPIC_WORKSPACE_ID.trim() }
+    : undefined,
 });
 
 const extractBalancedJson = (text, openChar, closeChar) => {
@@ -386,54 +388,54 @@ ${recentContext}`;
   }
 });
 
-// ElevenLabs Text-to-Speech endpoint
+// Boson Text-to-Speech endpoint. Audio remains in memory.
 app.post('/api/text-to-speech', async (req, res) => {
-  const { text, voiceId } = req.body;
-
-  if (!text) {
+  const { text, voiceId } = req.body || {};
+  if (typeof text !== 'string' || !text.trim()) {
     return res.status(400).json({ error: 'Text is required' });
   }
-
-  if (!process.env.ELEVENLABS_API_KEY) {
-    return res.status(500).json({ error: 'ElevenLabs API key not configured' });
+  if (Array.from(text).length > 300) {
+    return res.status(400).json({ error: 'Split speech into chunks of at most 300 characters.' });
   }
-
-  // Default to "George" voice if not specified
-  const voice = voiceId || 'JBFqnCBsd6RMkjVDRZzb';
-
+  if (voiceId !== undefined && (typeof voiceId !== 'string' || !voiceId.trim())) {
+    return res.status(400).json({ error: 'Voice must be a non-empty string.' });
+  }
+  if (!process.env.BOSON_API_KEY) {
+    return res.status(500).json({ error: 'Boson API key not configured' });
+  }
   try {
-    const elevenlabs = new ElevenLabsClient({
-      apiKey: process.env.ELEVENLABS_API_KEY,
+    const response = await fetch('https://api.boson.ai/v1/audio/speech', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${process.env.BOSON_API_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: 'higgs-tts-3',
+        input: text,
+        voice: voiceId || process.env.BOSON_VOICE || 'oliver',
+        response_format: 'mp3',
+        stream: false,
+      }),
+      signal: AbortSignal.timeout(120000),
     });
-
-    const audio = await elevenlabs.textToSpeech.convert(voice, {
-      text,
-      modelId: 'eleven_multilingual_v2',
-      outputFormat: 'mp3_44100_128',
-    });
-
-    // Collect chunks from the ReadableStream
-    const reader = audio.getReader();
-    const chunks = [];
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      chunks.push(value);
+    if (!response.ok) {
+      const message = response.status === 429
+        ? 'Boson rate limit reached. Please retry shortly.'
+        : response.status === 401 || response.status === 403
+          ? 'Boson rejected the API key. Check the server configuration.'
+          : `Boson speech generation failed (HTTP ${response.status}).`;
+      return res.status(response.status === 429 ? 429 : 502).json({ error: message });
     }
-
-    const audioBuffer = Buffer.concat(chunks);
-
-    res.set({
-      'Content-Type': 'audio/mpeg',
-      'Content-Length': audioBuffer.byteLength,
-    });
-    res.send(audioBuffer);
+    const audioBuffer = Buffer.from(await response.arrayBuffer());
+    if (!audioBuffer.length || !response.headers.get('content-type')?.startsWith('audio/')) {
+      return res.status(502).json({ error: 'Boson returned an invalid audio response.' });
+    }
+    res.type('audio/mpeg').send(audioBuffer);
   } catch (error) {
-    console.error('Error generating speech:', error);
-    res.status(500).json({
-      error: 'Failed to generate speech',
-      details: error.message,
+    const timeout = error.name === 'TimeoutError';
+    res.status(timeout ? 504 : 502).json({
+      error: timeout ? 'Boson speech generation timed out. Please retry.' : 'Unable to reach Boson. Please retry.',
     });
   }
 });

@@ -1,3 +1,4 @@
+import { generateSpeech } from '../speech';
 import { useState, useRef, useEffect } from 'react';
 import { Play, Pause, Loader2, Volume2, Mic, Square, RotateCcw, Check, Circle } from 'lucide-react';
 
@@ -22,6 +23,7 @@ export function AudioStatusBadge({ hasAudio, isAuthor }) {
 // Text-to-Speech button for AI Co-Host lines (audio stored in browser memory)
 export function TTSButton({ text, lineIndex, audioBlob, onAudioChange }) {
   const [isGenerating, setIsGenerating] = useState(false);
+  const [generationError, setGenerationError] = useState(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [audioUrl, setAudioUrl] = useState(null);
   const audioRef = useRef(null);
@@ -62,23 +64,14 @@ export function TTSButton({ text, lineIndex, audioBlob, onAudioChange }) {
 
   const generateTTS = async () => {
     setIsGenerating(true);
+    setGenerationError(null);
     try {
-      const response = await fetch('/api/text-to-speech', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text }),
-      });
-
-      if (!response.ok) {
-        throw new Error('Failed to generate speech');
-      }
-
-      const blob = await response.blob();
+      const blob = await generateSpeech(text);
 
       // Store in parent component's state (browser memory)
       onAudioChange(lineIndex, blob);
     } catch (error) {
-      console.error('TTS error:', error);
+      setGenerationError(error.message);
     } finally {
       setIsGenerating(false);
     }
@@ -87,7 +80,8 @@ export function TTSButton({ text, lineIndex, audioBlob, onAudioChange }) {
   // If audio exists, show play button with regenerate option
   if (audioBlob) {
     return (
-      <div className="flex items-center gap-1">
+      <div className="flex flex-wrap items-center gap-1">
+        {generationError && <span role="alert" className="w-full text-xs text-red-400">{generationError}</span>}
         <button
           onClick={handlePlay}
           className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-emerald-600/20 text-emerald-400 hover:bg-emerald-600/30 transition-all text-xs font-medium"
@@ -115,19 +109,22 @@ export function TTSButton({ text, lineIndex, audioBlob, onAudioChange }) {
 
   // No audio yet, show generate button
   return (
-    <button
-      onClick={generateTTS}
-      disabled={isGenerating}
-      className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-emerald-600/20 text-emerald-400 hover:bg-emerald-600/30 transition-all text-xs font-medium disabled:opacity-50"
-      title="Generate AI voice"
-    >
-      {isGenerating ? (
-        <Loader2 size={14} className="animate-spin" />
-      ) : (
-        <Volume2 size={14} />
-      )}
-      {isGenerating ? 'Generating...' : 'Generate'}
-    </button>
+    <div>
+      {generationError && <p role="alert" className="text-xs text-red-400 mb-1">{generationError}</p>}
+      <button
+        onClick={generateTTS}
+        disabled={isGenerating}
+        className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-emerald-600/20 text-emerald-400 hover:bg-emerald-600/30 transition-all text-xs font-medium disabled:opacity-50"
+        title="Generate AI voice"
+      >
+        {isGenerating ? (
+          <Loader2 size={14} className="animate-spin" />
+        ) : (
+          <Volume2 size={14} />
+        )}
+        {isGenerating ? 'Generating...' : 'Generate'}
+      </button>
+    </div>
   );
 }
 

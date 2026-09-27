@@ -26,3 +26,6 @@ npm-debug.log*
 
 # Audio recordings
 audio/
+
+# Function tests
+tests/
