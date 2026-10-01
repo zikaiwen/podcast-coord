@@ -367,7 +367,7 @@ ${blogText}
   };
 
   const handleAuthorTranscriptChange = async (lineIndex, transcript) => {
-    const cleanTranscript = transcript.trim();
+    const cleanTranscript = typeof transcript === 'string' ? transcript.trim() : '';
 
     if (cleanTranscript) {
       setRecordingTranscripts(prev => ({
@@ -429,6 +429,9 @@ ${blogText}
       ));
       handleAudioChange(nextAiLineIndex, null);
     } catch (error) {
+      if (lastRewriteRef.current === rewriteKey) {
+        lastRewriteRef.current = '';
+      }
       console.error('Error rewriting AI co-host line:', error);
       setRewriteError(error.message);
     } finally {

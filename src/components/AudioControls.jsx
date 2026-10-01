@@ -1,3 +1,4 @@
+import { transcribeRecording } from '../transcription';
 import { generateSpeech } from '../speech';
 import { useState, useRef, useEffect } from 'react';
 import { Play, Pause, Loader2, Volume2, Mic, Square, RotateCcw, Check, Circle } from 'lucide-react';
@@ -136,11 +137,22 @@ export function RecordButton({ lineIndex, audioBlob, onAudioChange, onTranscript
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
   const audioRef = useRef(null);
-  const recognitionRef = useRef(null);
-  const transcriptRef = useRef('');
-  const finalTranscriptRef = useRef('');
-  const manualRecordingRef = useRef(false);
-  const flushedTranscriptRef = useRef(false);
+  const [isTranscribing, setIsTranscribing] = useState(false);
+  const [recordingError, setRecordingError] = useState(null);
+  const transcriptionAbortRef = useRef(null);
+  const recordingRunRef = useRef(0);
+
+  useEffect(() => () => {
+    recordingRunRef.current += 1;
+    transcriptionAbortRef.current?.abort();
+    const recorder = mediaRecorderRef.current;
+    if (recorder) {
+      recorder.onstop = null;
+      if (recorder.state !== 'inactive') recorder.stop();
+      recorder.stream.getTracks().forEach(track => track.stop());
+    }
+    audioRef.current?.pause();
+  }, []);
 
   // Create object URL when audioBlob changes
   useEffect(() => {
@@ -156,101 +168,53 @@ export function RecordButton({ lineIndex, audioBlob, onAudioChange, onTranscript
     }
   }, [audioBlob]);
 
-  const flushTranscript = () => {
-    if (!onTranscriptChange || flushedTranscriptRef.current) return;
-    flushedTranscriptRef.current = true;
-    onTranscriptChange(lineIndex, transcriptRef.current.trim());
+  const transcribe = async (blob) => {
+    transcriptionAbortRef.current?.abort();
+    const controller = new AbortController();
+    transcriptionAbortRef.current = controller;
+    setIsTranscribing(true);
+    setRecordingError(null);
+    try {
+      const transcript = await transcribeRecording(blob, { signal: controller.signal });
+      if (!controller.signal.aborted) await onTranscriptChange?.(lineIndex, transcript);
+    } catch (error) {
+      if (!controller.signal.aborted) setRecordingError(error.message);
+    } finally {
+      if (transcriptionAbortRef.current === controller && !controller.signal.aborted) {
+        setIsTranscribing(false);
+      }
+    }
   };
 
   const startRecording = async () => {
+    let stream;
+    const run = ++recordingRunRef.current;
+    setRecordingError(null);
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      if (run !== recordingRunRef.current) {
+        stream.getTracks().forEach(track => track.stop());
+        return;
+      }
       const mediaRecorder = new MediaRecorder(stream);
       mediaRecorderRef.current = mediaRecorder;
       audioChunksRef.current = [];
-      transcriptRef.current = '';
-      finalTranscriptRef.current = '';
-      manualRecordingRef.current = true;
-      flushedTranscriptRef.current = false;
-
-      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-      if (SpeechRecognition && onTranscriptChange) {
-        const recognition = new SpeechRecognition();
-        recognition.continuous = true;
-        recognition.interimResults = true;
-        recognition.lang = navigator.language || 'en-US';
-
-        recognition.onresult = (event) => {
-          let interimTranscript = '';
-
-          for (let i = event.resultIndex; i < event.results.length; i++) {
-            const transcript = event.results[i][0].transcript;
-            if (event.results[i].isFinal) {
-              finalTranscriptRef.current = `${finalTranscriptRef.current} ${transcript}`.trim();
-            } else {
-              interimTranscript += transcript;
-            }
-          }
-
-          transcriptRef.current = `${finalTranscriptRef.current} ${interimTranscript}`.trim();
-        };
-
-        recognition.onerror = (event) => {
-          console.warn('Speech recognition error:', event.error);
-        };
-
-        recognition.onend = () => {
-          if (!manualRecordingRef.current) {
-            flushTranscript();
-          }
-        };
-
-        recognitionRef.current = recognition;
-        try {
-          recognition.start();
-        } catch (error) {
-          console.warn('Speech recognition could not start:', error);
-          recognitionRef.current = null;
-        }
-      } else {
-        recognitionRef.current = null;
-      }
-
       mediaRecorder.ondataavailable = (event) => {
-        if (event.data.size > 0) {
-          audioChunksRef.current.push(event.data);
-        }
+        if (event.data.size > 0) audioChunksRef.current.push(event.data);
       };
-
       mediaRecorder.onstop = () => {
-        const blob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+        // Preserve the browser's actual format (WebM, MP4, etc.).
+        const blob = new Blob(audioChunksRef.current, { type: mediaRecorder.mimeType });
         stream.getTracks().forEach(track => track.stop());
-        manualRecordingRef.current = false;
-
-        if (recognitionRef.current) {
-          try {
-            recognitionRef.current.stop();
-          } catch (error) {
-            console.warn('Speech recognition could not stop:', error);
-          }
-        }
-
-        // Store in parent component's state (browser memory)
+        setIsRecording(false);
         onAudioChange(lineIndex, blob);
-
-        if (onTranscriptChange) {
-          if (recognitionRef.current) {
-            window.setTimeout(flushTranscript, 250);
-          } else {
-            flushTranscript();
-          }
-        }
+        if (onTranscriptChange) void transcribe(blob);
       };
-
       mediaRecorder.start();
       setIsRecording(true);
     } catch (error) {
-      console.error('Recording error:', error);
+      stream?.getTracks().forEach(track => track.stop());
+      setRecordingError(`Could not start recording: ${error.message}`);
     }
   };
 
@@ -278,6 +242,10 @@ export function RecordButton({ lineIndex, audioBlob, onAudioChange, onTranscript
   };
 
   const resetRecording = () => {
+    transcriptionAbortRef.current?.abort();
+    setIsTranscribing(false);
+    setRecordingError(null);
+    audioRef.current?.pause();
     // Clear from parent component's state
     onAudioChange(lineIndex, null);
     setIsPlaying(false);
@@ -298,7 +266,10 @@ export function RecordButton({ lineIndex, audioBlob, onAudioChange, onTranscript
 
   if (audioBlob) {
     return (
-      <div className="flex items-center gap-1">
+      <div className="flex flex-wrap items-center gap-1">
+        {isTranscribing && <span role="status" className="flex items-center gap-1 text-xs text-slate-400"><Loader2 size={14} className="animate-spin" />Transcribing and updating...</span>}
+        {recordingError && <span role="alert" className="w-full text-xs text-red-400">{recordingError}</span>}
+        {recordingError && <button onClick={() => transcribe(audioBlob)} disabled={isTranscribing} className="text-xs text-indigo-400 disabled:opacity-50">Retry transcription</button>}
         <button
           onClick={playRecording}
           className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-indigo-600/20 text-indigo-400 hover:bg-indigo-600/30 transition-all text-xs font-medium"
@@ -309,6 +280,7 @@ export function RecordButton({ lineIndex, audioBlob, onAudioChange, onTranscript
         </button>
         <button
           onClick={resetRecording}
+          disabled={isTranscribing}
           className="p-1.5 rounded-lg bg-slate-700/50 text-slate-400 hover:bg-slate-700 hover:text-slate-300 transition-all"
           title="Re-record"
         >
@@ -319,13 +291,16 @@ export function RecordButton({ lineIndex, audioBlob, onAudioChange, onTranscript
   }
 
   return (
-    <button
-      onClick={startRecording}
-      className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-indigo-600/20 text-indigo-400 hover:bg-indigo-600/30 transition-all text-xs font-medium"
-      title="Record your voice"
-    >
-      <Mic size={14} />
-      Record
-    </button>
+    <div>
+      {recordingError && <p role="alert" className="text-xs text-red-400 mb-1">{recordingError}</p>}
+      <button
+        onClick={startRecording}
+        className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-indigo-600/20 text-indigo-400 hover:bg-indigo-600/30 transition-all text-xs font-medium"
+        title="Record your voice"
+      >
+        <Mic size={14} />
+        Record
+      </button>
+    </div>
   );
 }

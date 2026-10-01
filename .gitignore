@@ -27,5 +27,7 @@ npm-debug.log*
 # Audio recordings
 audio/
 
-# Function tests
-tests/
+# Keep local test experiments ignored, but include regression coverage.
+tests/*
+!tests/transcription.test.js
+!tests/model-response.test.js

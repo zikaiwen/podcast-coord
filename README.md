@@ -6,7 +6,7 @@ Transform your written content into engaging dialogue podcasts with an AI co-hos
 
 - **Script Generation**: Paste your blog post, article, or any content and generate a natural conversation script between you (the expert) and an AI co-host (the interviewer)
 - **Text-to-Speech**: Generate AI voice for the co-host lines using Boson AI
-- **Recording**: Record your own voice for the host lines directly in the browser
+- **Recording**: Record your own voice in the browser; Boson transcribes each take and Claude updates the next AI co-host line
 - **Audio Export**: Export the complete podcast as a WAV file
 - **Meta Info**: Generate episode summaries and chapter markers with accurate timestamps
 
@@ -49,6 +49,8 @@ BOSON_API_KEY=your_boson_key
 If your Anthropic key is not scoped to a workspace, also set `ANTHROPIC_WORKSPACE_ID` in `.env` to the workspace's actual `wrkspc_...` ID. The backend sends this ID with every Anthropic request.
 
 Speech uses Boson Higgs TTS 3 with the `oliver` voice. Set `BOSON_VOICE` in `.env` to choose another preset or custom voice ID. Long lines are split into requests of at most 300 characters and joined in browser memory. Restart the backend after changing `.env`.
+
+Recording transcription requires Higgs Realtime access on your Boson account. After you stop a recording, the browser converts it to 24 kHz mono PCM and sends it to Boson using a short-lived credential from the backend. The transcript goes to Claude for rewriting; recording audio stays in browser memory and is never saved on the backend. Failed transcription can be retried without re-recording.
 
 ### Running the App
 

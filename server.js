@@ -2,6 +2,7 @@ import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
 import Anthropic from '@anthropic-ai/sdk';
+import { extractModelText } from './model-response.js';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -61,6 +62,9 @@ const extractBalancedJson = (text, openChar, closeChar) => {
 };
 
 const parseJsonFromModel = (responseText) => {
+  if (typeof responseText !== 'string' || !responseText.trim()) {
+    throw new Error('Model response did not include any text content');
+  }
   const text = responseText.trim();
   const candidates = [text];
 
@@ -161,12 +165,7 @@ Return ONLY the JSON array. Do not wrap it in markdown, prose, or an object.`;
       system: fullSystemPrompt,
     });
 
-    const textBlock = message.content.find((block) => block.type === 'text');
-    responseText = textBlock?.text;
-
-    if (!responseText) {
-      throw new Error('Model response did not include any text content');
-    }
+    responseText = extractModelText(message);
 
     const parsedResponse = parseJsonFromModel(responseText);
     const script = normalizeDialogueLines(extractDialogueArray(parsedResponse));
@@ -270,7 +269,7 @@ ${followingContext || '(No following context)'}`;
   try {
     const message = await anthropic.messages.create({
       model: ANTHROPIC_MODEL,
-      max_tokens: 512,
+      max_tokens: 2048,
       messages: [
         {
           role: 'user',
@@ -280,10 +279,10 @@ ${followingContext || '(No following context)'}`;
       system: systemPrompt,
     });
 
-    const responseText = message.content[0].text;
+    const responseText = extractModelText(message);
     const rewrite = parseJsonFromModel(responseText);
 
-    if (!rewrite.text) {
+    if (typeof rewrite?.text !== 'string' || !rewrite.text.trim()) {
       throw new Error('Rewrite response did not include text');
     }
 
@@ -360,7 +359,7 @@ ${recentContext}`;
       system: systemPrompt,
     });
 
-    const responseText = message.content[0].text;
+    const responseText = extractModelText(message);
     const parsedResponse = parseJsonFromModel(responseText);
     const round = Array.isArray(parsedResponse) ? parsedResponse : parsedResponse.round;
 
@@ -385,6 +384,40 @@ ${recentContext}`;
       error: 'Failed to generate extra conversation round',
       details: error.message,
     });
+  }
+});
+
+// Mint a short-lived credential; the permanent Boson key stays on the server.
+app.post('/api/transcription-session', async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  if (!process.env.BOSON_API_KEY) {
+    return res.status(500).json({ error: 'Boson API key not configured' });
+  }
+  try {
+    const response = await fetch('https://api.boson.ai/v1/realtime/client_secrets', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${process.env.BOSON_API_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ expires_after: { seconds: 300 } }),
+      signal: AbortSignal.timeout(15000),
+    });
+    if (!response.ok) {
+      const error = response.status === 401 || response.status === 403
+        ? 'Boson rejected transcription access. Check your API key and Higgs Realtime access.'
+        : response.status === 429
+          ? 'Boson rate limit reached. Retry transcription shortly.'
+          : `Unable to start Boson transcription (HTTP ${response.status}).`;
+      return res.status(response.status === 429 ? 429 : 502).json({ error });
+    }
+    const secret = await response.json();
+    if (typeof secret.value !== 'string' || !secret.value.startsWith('bai-eph-')) {
+      return res.status(502).json({ error: 'Boson returned an invalid transcription session.' });
+    }
+    res.json({ value: secret.value, expires_at: secret.expires_at });
+  } catch {
+    res.status(502).json({ error: 'Unable to reach Boson transcription. Please retry.' });
   }
 });
 
@@ -471,7 +504,7 @@ Return ONLY the summary text, no additional formatting or explanation.`;
       system: systemPrompt,
     });
 
-    const summary = message.content[0].text;
+    const summary = extractModelText(message);
     res.json({ summary });
   } catch (error) {
     console.error('Error generating summary:', error);
@@ -568,7 +601,7 @@ Return ONLY the metadata text, no additional explanation.`;
       system: systemPrompt,
     });
 
-    const metaInfo = message.content[0].text;
+    const metaInfo = extractModelText(message);
     res.json({ metaInfo });
   } catch (error) {
     console.error('Error generating meta-info:', error);
